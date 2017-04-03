@@ -38,7 +38,7 @@
 #define MAX_QUEUE_NAME			64
 #define MQI_MAGIC				0x12345678UL
 
-// Макросы для округление размера и указателя.
+
 #define ALIGN(i)				(((i) + LEVEL1_DCACHE_LINESIZE-1) & ~(LEVEL1_DCACHE_LINESIZE-1))
 #define ALIGN_PTR(p)			(((uintptr_t)(p) + LEVEL1_DCACHE_LINESIZE-1) & ~(LEVEL1_DCACHE_LINESIZE-1))
 
@@ -51,10 +51,10 @@ struct TSharedMemHeader
 	{
 		struct
 		{
-		volatile unsigned long	m_magic;		// Магическое число, для определения, что памать инициализирована.
-		volatile size_t			m_used;			// Количество подключений к памяти.
-		size_t					m_maxElmCount;	// Максимальное количество записей в очереди.
-		size_t					m_maxElmSize;	// Максимальный размер записи.
+		volatile unsigned long	m_magic;		// Magic number
+		volatile size_t			m_used;			//
+		size_t					m_maxElmCount;	// Maximum number of the elements in the queue.
+		size_t					m_maxElmSize;	// Maximum size of an element.
 		};
 		char					pad1[LEVEL1_DCACHE_LINESIZE];
 	};
@@ -77,14 +77,14 @@ struct TSharedMemHeader
 class TSPSCSharedQueuePrivate
 {
 protected:
-	void				*m_shared;			///< Указатель на исходную разделяемую память.
-	TSharedMemHeader	*m_hdr;				///< Указатель на заголовок разделяемой памяти в этой памяти.
-	char				*m_data;			///< Указатель на начало кольцевого буфера.
-	size_t				m_slotSize;			///< Заранее вычисленный размер слота.
-	size_t				m_memSize;			///< Заранее вычисленный совокупный размер памяти.
-	char				m_name[MAX_QUEUE_NAME+2];
+	void				*m_shared;					// Base pointer to shared memory.
+	TSharedMemHeader	*m_hdr;						// Aligned pointer to header in shared memory.
+	char				*m_data;					// Aligned pointer to slots.
+	size_t				m_slotSize;					// Precalculated slot (header + element) size.
+	size_t				m_memSize;					// Precalculated total memory size.
+	char				m_name[MAX_QUEUE_NAME+2];	// Name of the queue.
 #ifdef WIN32
-	HANDLE				m_fmap;				// file mapping object
+	HANDLE				m_fmap;						// file mapping object
 #endif
 public:
 	TSPSCSharedQueuePrivate();
@@ -147,7 +147,7 @@ inline bool TSPSCSharedQueuePrivate::open(const char* queueName, size_t elmSize,
 
 #ifdef WIN32
 	wchar_t	nameBuffer[256];
-	// Открываем или создаём разделяемую память.
+	// Open or create a new shared memory region.
 	lstrcpyW(nameBuffer, TEXT("Global\\Mem"));
 	len = lstrlenW(nameBuffer);
 	mbstowcs(nameBuffer+len, m_name+1, sizeof(nameBuffer)-len);
@@ -191,7 +191,6 @@ inline bool TSPSCSharedQueuePrivate::open(const char* queueName, size_t elmSize,
 		}
 	}
 	m_shared = mmap(NULL, m_memSize, PROT_READ | PROT_WRITE, MAP_SHARED, fmap, 0 );
-	// Файловый дескриптор можно закрыть. Это разрешено.
 	::close(fmap);
 
 	if ( m_shared == MAP_FAILED )
@@ -201,9 +200,9 @@ inline bool TSPSCSharedQueuePrivate::open(const char* queueName, size_t elmSize,
 		return false;
 	}
 #endif
-	// Выравниваем указатель на начало памяти.
+	// Make an aligned pointer to shared memory header.
 	m_hdr = (TSharedMemHeader*)ALIGN_PTR(m_shared);
-	// Память создана впервые?
+	// First time creation?
 	if (m_hdr->m_magic != MQI_MAGIC || create)
 	{
 		m_hdr->m_magic = MQI_MAGIC;
@@ -248,7 +247,7 @@ inline bool TSPSCSharedQueuePrivate::close()
 #else
 	if (m_shared)
 		munmap(m_shared, m_memSize);
-	// Закрыли последнюю программу - удаляем память.
+	// Close and remove shared memory if there is no one.
 	if (!used && m_name[0])
 		shm_unlink(m_name);
 #endif
@@ -262,20 +261,20 @@ inline bool TSPSCSharedQueuePrivate::push(size_t elmSize, const char* elm)
 {
 	if (!m_shared || m_hdr->m_magic!=MQI_MAGIC || elmSize>m_hdr->m_maxElmSize)
 		return false;
-	// Проверяем, есть ли свободное место.
 	readBarrier();
 	size_t	tail = m_hdr->m_tail;
 	size_t	nextTail = (tail+1) % m_hdr->m_maxElmCount;
+	// Is there space?
 	if (nextTail==m_hdr->m_head)
 		return false;
-	// Вычилсяем адрес слота для размещения данных.
+	// Calcalate the slot address.
 	char	*ptr = m_data + m_slotSize * tail;
-	// Помещаем размер данных и сами данные.
+	// Put data in the slot.
 	memmove(ptr, &elmSize, sizeof(size_t));
 	ptr += sizeof(size_t);
 	memmove(ptr, elm, elmSize);
 	writeBarrier();
-	// Сдвигаем указатель.
+	// Move the tail.
 	m_hdr->m_tail = nextTail;
 	return true;
 }
@@ -285,22 +284,22 @@ inline size_t TSPSCSharedQueuePrivate::pop(char* elm)
 {
 	if (!m_shared || m_hdr->m_magic!=MQI_MAGIC)
 		return 0;
-	// Проверяем, есть ли данные.
+	// Is there any data.
 	readBarrier();
 	size_t	head = m_hdr->m_head;
 	if (head==m_hdr->m_tail)
 		return 0;
-	// Вычилсяем адрес слота для считывания данных.
+	// Calcalate the slot address.
 	char	*ptr = m_data + m_slotSize * head;
 	size_t	len;
-	// Извлекаем длину полезных данных.
+	// Get data size.
 	memmove(&len, ptr, sizeof(size_t));
 	ptr += sizeof(size_t);
 	if (len>m_hdr->m_maxElmSize)
 		return 0;
-	// Извлекаем данные.
+	// Get data.
 	memmove(elm, ptr, len);
-	// Сдвигаем указатель.
+	// Move the head of the queue.
 	m_hdr->m_head = (head + 1) % m_hdr->m_maxElmCount;
 	writeBarrier();
 	return len;
@@ -343,4 +342,3 @@ size_t TSPSCSharedQueue::pop(char* elm)
 {
 	return m_pQueue->pop(elm);
 }
-
