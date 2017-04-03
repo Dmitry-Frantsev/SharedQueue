@@ -6,7 +6,7 @@
 #include <time.h>
 #include <string.h>
 
-#include "../Shared/Core/SharedQueue.h"
+#include "../Src/SharedQueue.h"
 
 #define MQ_MAXMSG	1000
 #define MSG_SIZE	1500
