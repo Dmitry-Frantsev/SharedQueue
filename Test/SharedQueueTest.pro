@@ -3,13 +3,13 @@ CONFIG += console
 CONFIG -= app_bundle
 CONFIG -= qt
 TARGET = SharedQueueTest
-DESTDIR = $$PWD/../../Bin
+DESTDIR = $$PWD/../Bin
 DEPENDPATH += .
 INCLUDEPATH += ./
 
-HEADERS +=	$$PWD/../Shared/Core/SharedQueue.h
+HEADERS +=	$$PWD/../Src/SharedQueue.h
 
-SOURCES += 	$$PWD/../Shared/Core/SharedQueue.cpp \
+SOURCES += 	$$PWD/../Src/SharedQueue.cpp \
 			main.cpp \
 
 
